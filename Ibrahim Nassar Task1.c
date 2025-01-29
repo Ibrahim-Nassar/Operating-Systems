@@ -63,6 +63,7 @@ int shell_cd(char **args) {
             }
         }
     }
+    fflush(stdout);
     return 1;
 }
 
@@ -78,10 +79,11 @@ int shell_dir(char **args) {
     }
     struct dirent *entry;
     while ((entry = readdir(d)) != NULL) {
-        printf("%s ", entry->d_name);
+        printf("%s\t", entry->d_name);
     }
     printf("\n");
     closedir(d);
+    fflush(stdout);
     return 1;
 }
 
@@ -90,12 +92,14 @@ int shell_environ(char **args) {
     for (char **env = environ; *env != 0; env++) {
         printf("%s\n", *env);
     }
+    fflush(stdout);
     return 1;
 }
 
 int shell_set(char **args) {
     if (args[1] == NULL || args[2] == NULL) {
         fprintf(stderr, "Usage: set VARIABLE VALUE\n");
+        fflush(stderr);
         return 1;
     }
     if (setenv(args[1], args[2], 1) != 0) {
@@ -107,20 +111,14 @@ int shell_set(char **args) {
 int shell_echo(char **args) {
     if (args[1] == NULL) {
         printf("\n");
+        fflush(stdout);
         return 1;
     }
-    char *output = strdup(args[1]);
-    if (output == NULL) {
-        perror("echo");
-        return 1;
-    }
-    int index = 0;
-    int len = strlen(output);
     for (int i = 1; i < MAX_ARGS && args[i] != NULL; i++) {
         printf("%s ", args[i]);
     }
     printf("\n");
-    free(output);
+    fflush(stdout);
     return 1;
 }
 
@@ -136,11 +134,13 @@ int shell_help(char **args) {
     printf("  pause               Pause the shell until 'Enter' is pressed\n");
     printf("  quit                Exit the shell\n");
     printf("External commands are also supported.\n");
+    fflush(stdout);
     return 1;
 }
 
 int shell_pause_shell(char **args) {
     printf("Press Enter to continue...");
+    fflush(stdout);
     while (getchar() != '\n');
     return 1;
 }
@@ -160,7 +160,11 @@ int launch(char **args, int background, char *input_file, char *output_file, int
                 perror("Input redirection");
                 exit(EXIT_FAILURE);
             }
-            dup2(fd0, STDIN_FILENO);
+            if (dup2(fd0, STDIN_FILENO) < 0) {
+                perror("dup2");
+                close(fd0);
+                exit(EXIT_FAILURE);
+            }
             close(fd0);
         }
         if (output_file != NULL) {
@@ -173,7 +177,11 @@ int launch(char **args, int background, char *input_file, char *output_file, int
                 perror("Output redirection");
                 exit(EXIT_FAILURE);
             }
-            dup2(fd1, STDOUT_FILENO);
+            if (dup2(fd1, STDOUT_FILENO) < 0) {
+                perror("dup2");
+                close(fd1);
+                exit(EXIT_FAILURE);
+            }
             close(fd1);
         }
         if (execvp(args[0], args) == -1) {
@@ -189,6 +197,7 @@ int launch(char **args, int background, char *input_file, char *output_file, int
             } while (!WIFEXITED(status) && !WIFSIGNALED(status));
         } else {
             printf("Process running in background with PID %d\n", pid);
+            fflush(stdout);
         }
     }
     return 1;
@@ -199,59 +208,97 @@ int execute(char **args) {
         return 1;
     }
 
-    for (int i = 0; i < num_builtins(); i++) {
-        if (strcmp(args[0], builtin_str[i]) == 0) {
-            return (*builtin_func[i])(args);
-        }
-    }
-
     int background = 0;
     char *input_file = NULL;
     char *output_file = NULL;
     int append = 0;
 
     int i = 0;
+    int j;
+
     while (args[i] != NULL) {
         if (strcmp(args[i], "<") == 0) {
             if (args[i + 1] != NULL) {
                 input_file = args[i + 1];
-                for (int j = i; args[j + 2] != NULL; j++) {
+                for (j = i; args[j + 2] != NULL; j++) {
                     args[j] = args[j + 2];
                 }
-                args[i + 2] = NULL;
+                args[j] = NULL;
             } else {
                 fprintf(stderr, "Expected input file after '<'\n");
+                fflush(stderr);
                 return 1;
             }
         } else if (strcmp(args[i], ">") == 0) {
             if (args[i + 1] != NULL) {
                 output_file = args[i + 1];
                 append = 0;
-                for (int j = i; args[j + 2] != NULL; j++) {
+                for (j = i; args[j + 2] != NULL; j++) {
                     args[j] = args[j + 2];
                 }
-                args[i + 2] = NULL;
+                args[j] = NULL;
             } else {
                 fprintf(stderr, "Expected output file after '>'\n");
+                fflush(stderr);
                 return 1;
             }
         } else if (strcmp(args[i], ">>") == 0) {
             if (args[i + 1] != NULL) {
                 output_file = args[i + 1];
                 append = 1;
-                for (int j = i; args[j + 2] != NULL; j++) {
+                for (j = i; args[j + 2] != NULL; j++) {
                     args[j] = args[j + 2];
                 }
-                args[i + 2] = NULL;
+                args[j] = NULL;
             } else {
                 fprintf(stderr, "Expected output file after '>>'\n");
+                fflush(stderr);
                 return 1;
             }
         } else if (strcmp(args[i], "&") == 0) {
             background = 1;
             args[i] = NULL;
+            break;
         } else {
             i++;
+        }
+    }
+
+    for (j = 0; j < num_builtins(); j++) {
+        if (strcmp(args[0], builtin_str[j]) == 0) {
+            int saved_stdout = -1;
+            if (output_file != NULL) {
+                saved_stdout = dup(STDOUT_FILENO);
+                if (saved_stdout < 0) {
+                    perror("dup");
+                    return 1;
+                }
+                int fd;
+                if (append)
+                    fd = open(output_file, O_WRONLY | O_CREAT | O_APPEND, 0644);
+                else
+                    fd = open(output_file, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+                if (fd < 0) {
+                    perror("Output redirection");
+                    close(saved_stdout);
+                    return 1;
+                }
+                if (dup2(fd, STDOUT_FILENO) < 0) {
+                    perror("dup2");
+                    close(fd);
+                    close(saved_stdout);
+                    return 1;
+                }
+                close(fd);
+            }
+            int status = (*builtin_func[j])(args);
+            if (output_file != NULL && saved_stdout != -1) {
+                if (dup2(saved_stdout, STDOUT_FILENO) < 0) {
+                    perror("dup2");
+                }
+                close(saved_stdout);
+            }
+            return status;
         }
     }
 
@@ -289,7 +336,6 @@ char **split_line(char *line) {
     token = strtok(line, " \t");
     while (token != NULL) {
         tokens[position++] = token;
-
         if (position >= bufsize) {
             bufsize += MAX_ARGS;
             tokens = realloc(tokens, bufsize * sizeof(char*));
@@ -298,7 +344,6 @@ char **split_line(char *line) {
                 exit(EXIT_FAILURE);
             }
         }
-
         token = strtok(NULL, " \t");
     }
     tokens[position] = NULL;
@@ -318,7 +363,7 @@ void shell_loop(FILE *input_stream) {
             perror("getcwd");
             printf("$ ");
         }
-
+        fflush(stdout);
         line = read_line(input_stream);
         args = split_line(line);
         status = execute(args);
