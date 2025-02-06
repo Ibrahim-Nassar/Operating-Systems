@@ -5,6 +5,7 @@
 #include <pthread.h>
 
 #define MAX_WORDS 10000
+#define OVERLAP 100
 
 char *globalWords[MAX_WORDS];
 int globalCounts[MAX_WORDS];
@@ -36,28 +37,35 @@ typedef struct {
 
 void *worker(void *arg) {
     ThreadArg *a = (ThreadArg *)arg;
-    long i = a->start, end = a->end;
-    if (i > 0) {
-        while (i < end && !isspace(buffer[i]))
-            i++;
+    long pos = a->start;
+    long originalEnd = a->end;
+    long fileSize = strlen(buffer);
+    long extendedEnd = (a->end + OVERLAP < fileSize) ? a->end + OVERLAP : fileSize;
+
+    if (pos > 0) {
+        while (pos < extendedEnd && !isspace(buffer[pos]))
+            pos++;
     }
-    while (i < end) {
-        while (i < end && isspace(buffer[i]))
-            i++;
-        if (i >= end)
+    while (pos < extendedEnd) {
+        while (pos < extendedEnd && isspace(buffer[pos]))
+            pos++;
+        if (pos >= extendedEnd)
             break;
-        long j = i;
-        while (j < end && !isspace(buffer[j]))
-            j++;
-        int len = j - i;
-        char *word = malloc(len + 1);
-        strncpy(word, buffer + i, len);
-        word[len] = '\0';
-        for (int k = 0; k < len; k++)
-            word[k] = tolower(word[k]);
-        updateWord(word);
-        free(word);
-        i = j;
+        long wordStart = pos;
+        long wordEnd = pos;
+        while (wordEnd < extendedEnd && !isspace(buffer[wordEnd]))
+            wordEnd++;
+        if (wordStart < originalEnd) {
+            int len = wordEnd - wordStart;
+            char *word = malloc(len + 1);
+            strncpy(word, buffer + wordStart, len);
+            word[len] = '\0';
+            for (int k = 0; k < len; k++)
+                word[k] = tolower(word[k]);
+            updateWord(word);
+            free(word);
+        }
+        pos = wordEnd;
     }
     return NULL;
 }
@@ -83,6 +91,7 @@ int main(int argc, char *argv[]) {
     }
     buffer[size] = '\0';
     fclose(f);
+
     pthread_t *threads = malloc(numThreads * sizeof(pthread_t));
     ThreadArg *args = malloc(numThreads * sizeof(ThreadArg));
     long seg = size / numThreads;
@@ -93,6 +102,7 @@ int main(int argc, char *argv[]) {
     }
     for (int i = 0; i < numThreads; i++)
         pthread_join(threads[i], NULL);
+
     int total = 0;
     for (int i = 0; i < globalWordCount; i++) {
         printf("%s: %d\n", globalWords[i], globalCounts[i]);
@@ -100,6 +110,7 @@ int main(int argc, char *argv[]) {
         free(globalWords[i]);
     }
     printf("Total Words: %d\n", total);
+
     free(buffer);
     free(threads);
     free(args);
