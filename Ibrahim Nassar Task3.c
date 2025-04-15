@@ -2,20 +2,21 @@
 #include <stdlib.h>
 #include <string.h>
 
-// Structure to represent a page in memory
+// Structure to represent each memory frame
 typedef struct {
     int page_number;       // Page number stored in the frame
-    unsigned int age;      // Age counter used by the Aging algorithm
-    int referenced;        // Whether the page was referenced recently
+    unsigned int age;      // Used to approximate "least recently used" using 8 bits
+    int referenced;        // Flag to indicate if the page was referenced recently
 } PageFrame;
 
-// Count how many unique page numbers are in the reference list
+// Counts how many unique page numbers are in the reference list
 int count_unique_pages(int *references, int num_references) {
     int *unique = NULL;
     int num_unique = 0;
 
     for (int i = 0; i < num_references; i++) {
         int found = 0;
+        // Check if this page is already counted
         for (int j = 0; j < num_unique; j++) {
             if (unique && unique[j] == references[i]) {
                 found = 1;
@@ -23,7 +24,7 @@ int count_unique_pages(int *references, int num_references) {
             }
         }
         if (!found) {
-            // Add the new unique page to the array
+            // Add the unique page to our list
             unique = realloc(unique, (num_unique + 1) * sizeof(int));
             if (!unique) {
                 perror("realloc");
@@ -37,9 +38,9 @@ int count_unique_pages(int *references, int num_references) {
     return num_unique;
 }
 
-// Simulate the Aging page replacement algorithm
+// Runs the aging page replacement algorithm for a given number of frames
 int simulate_aging(int *references, int num_references, int num_frames) {
-    PageFrame *frames = calloc(num_frames, sizeof(PageFrame)); // Allocate memory for page frames
+    PageFrame *frames = calloc(num_frames, sizeof(PageFrame)); // Allocate space for frames
     if (!frames) {
         perror("calloc");
         exit(EXIT_FAILURE);
@@ -47,14 +48,14 @@ int simulate_aging(int *references, int num_references, int num_frames) {
 
     int page_faults = 0;
 
-    // Initialize frames
+    // Initialize all frames to be empty
     for (int i = 0; i < num_frames; i++) {
-        frames[i].page_number = -1; // -1 means empty
+        frames[i].page_number = -1;
         frames[i].age = 0;
         frames[i].referenced = 0;
     }
 
-    // Go through each page reference
+    // Loop through all page references
     for (int i = 0; i < num_references; i++) {
         int current_page = references[i];
         int found = 0;
@@ -63,21 +64,21 @@ int simulate_aging(int *references, int num_references, int num_frames) {
         for (int j = 0; j < num_frames; j++) {
             if (frames[j].page_number == current_page) {
                 found = 1;
-                frames[j].referenced = 1; // Mark as referenced
+                frames[j].referenced = 1; // Mark as recently used
                 break;
             }
         }
 
-        // If page not found, it's a page fault
+        // Page fault: page not found in memory
         if (!found) {
             page_faults++;
             int replace_index = -1;
             unsigned int min_age = 0xFFFFFFFF;
 
-            // Find the least recently used page (smallest age)
+            // Find the frame with the smallest age (least recently used)
             for (int j = 0; j < num_frames; j++) {
                 if (frames[j].page_number == -1) {
-                    replace_index = j; // Empty frame found
+                    replace_index = j; // Empty slot
                     break;
                 }
                 if (frames[j].age < min_age) {
@@ -86,23 +87,23 @@ int simulate_aging(int *references, int num_references, int num_frames) {
                 }
             }
 
-            // Replace the selected page
+            // Replace the chosen frame with the new page
             frames[replace_index].page_number = current_page;
             frames[replace_index].referenced = 1;
             frames[replace_index].age = 0;
         }
 
-        // Update age for each frame using bit-shifting
+        // Age update step for all frames (bit shifting)
         for (int j = 0; j < num_frames; j++) {
             if (frames[j].page_number != -1) {
-                // Right shift the age and add 128 if referenced (set highest bit)
+                // Shift age to the right and set MSB if it was referenced
                 frames[j].age = (frames[j].age >> 1) | (frames[j].referenced << 7);
-                frames[j].referenced = 0; // Reset after aging
+                frames[j].referenced = 0; // Reset referenced flag for next cycle
             }
         }
     }
 
-    free(frames); // Free memory after simulation
+    free(frames);
     return page_faults;
 }
 
@@ -119,13 +120,14 @@ int main() {
     int max_references = 0;
     char line[256];
 
-    // Read page numbers from file
+    // Read all the page numbers from the input file
     while (fgets(line, sizeof(line), file)) {
         int page;
         if (sscanf(line, "%d", &page) != 1) {
             fprintf(stderr, "Skipping invalid line: %s", line);
             continue;
         }
+        // Expand memory if needed
         if (num_references >= max_references) {
             max_references = (max_references == 0) ? 1 : max_references * 2;
             int *temp = realloc(references, max_references * sizeof(int));
@@ -149,13 +151,13 @@ int main() {
 
     int num_unique = count_unique_pages(references, num_references);
 
-    // Run simulation with 1 up to the number of unique frames
+    // Run the algorithm for 1 up to the number of unique frames
     for (int num_frames = 1; num_frames <= num_unique; num_frames++) {
         int page_faults = simulate_aging(references, num_references, num_frames);
         double faults_per_1000 = (double)page_faults * 1000.0 / num_references;
         printf("%d %.2f\n", num_frames, faults_per_1000);
     }
 
-    free(references); // Free memory
+    free(references);
     return 0;
 }
